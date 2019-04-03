@@ -1,3 +1,5 @@
+#![allow(unused)] // Hardcode a bunch of versioning.
+
 extern crate cc;
 #[cfg(feature = "vendored")]
 extern crate openssl_src;
@@ -45,6 +47,22 @@ fn main() {
     check_rustc_versions();
 
     let target = env::var("TARGET").unwrap();
+    let host = env::var("HOST").unwrap();
+
+    if target.contains("windows") && !host.contains("windows")
+        || target.contains("darwin") && !host.contains("darwin")
+        || target.contains("linux") && !host.contains("linux")
+    {
+        println!("cargo:rustc-cfg=osslconf=\"OPENSSL_NO_KRB5\"");
+        println!("cargo:rustc-cfg=osslconf=\"OPENSSL_NO_RFC3779\"");
+        println!("cargo:conf=OPENSSL_NO_KRB5,OPENSSL_NO_RFC3779");
+        println!("cargo:rustc-cfg=ossl101");
+        println!("cargo:rustc-cfg=ossl102");
+        println!("cargo:rustc-cfg=ossl102h");
+        println!("cargo:version_number=100020ff");
+        println!("cargo:version=102");
+        return;
+    }
 
     let (lib_dir, include_dir) = find::get_openssl(&target);
 
@@ -61,26 +79,38 @@ fn main() {
         );
     }
 
-    println!(
-        "cargo:rustc-link-search=native={}",
-        lib_dir.to_string_lossy()
-    );
+    if target.contains("darwin") {
+        // DBX: We're going to unfatten our archives, so they will end up in `OUT_DIR`.
+        println!("cargo:rustc-link-search=native={}", env::var("OUT_DIR").unwrap());
+    } else {
+        println!("cargo:rustc-link-search=native={}",
+                 lib_dir.to_string_lossy());
+    }
     println!("cargo:include={}", include_dir.to_string_lossy());
 
     let version = validate_headers(&[include_dir.clone().into()]);
 
-    let libs_env = env("OPENSSL_LIBS");
-    let libs = match libs_env.as_ref().and_then(|s| s.to_str()) {
-        Some(ref v) => v.split(":").collect(),
-        None => match version {
-            Version::Openssl10x if target.contains("windows") => vec!["ssleay32", "libeay32"],
-            Version::Openssl11x if target.contains("windows") => vec!["libssl", "libcrypto"],
-            _ => vec!["ssl", "crypto"],
-        },
+    let libs = if target.contains("windows") {
+        &["ssleay32", "libeay32"]
+    } else {
+        &["ssl-static", "crypto-static"]
     };
 
-    let kind = determine_mode(Path::new(&lib_dir), &libs);
+    let kind = "static";
     for lib in libs.into_iter() {
+        if target.contains("darwin") {
+            // DBX: Our `.a` files are actually fat archives. Let's use `lipo` to unfatten them so that Rust can link.
+            let lib_file_name = format!("lib{}.a", lib);
+            let out_lib = PathBuf::from(env::var("OUT_DIR").unwrap()).join(&lib_file_name);
+            ::std::process::Command::new("lipo")
+                .arg(&lib_dir.join(&lib_file_name))
+                .arg("-thin")
+                .arg("x86_64")
+                .arg("-output")
+                .arg(&out_lib)
+                .output()
+                .expect("Failed to unpack fat archive to x86_64!");
+        }
         println!("cargo:rustc-link-lib={}={}", kind, lib);
     }
 

@@ -6,18 +6,18 @@ use std::process::{self, Command};
 use super::env;
 
 pub fn get_openssl(target: &str) -> (PathBuf, PathBuf) {
-    let lib_dir = env("OPENSSL_LIB_DIR").map(PathBuf::from);
-    let include_dir = env("OPENSSL_INCLUDE_DIR").map(PathBuf::from);
+    let virtual_env = env::current_dir().unwrap().join("..").join("..").join("..").join("virtual_env");
 
-    if lib_dir.is_none() || include_dir.is_none() {
-        let openssl_dir = env("OPENSSL_DIR").unwrap_or_else(|| find_openssl_dir(&target));
-        let openssl_dir = Path::new(&openssl_dir);
-        let lib_dir = lib_dir.unwrap_or_else(|| openssl_dir.join("lib"));
-        let include_dir = include_dir.unwrap_or_else(|| openssl_dir.join("include"));
-        (lib_dir, include_dir)
-    } else {
-        (lib_dir.unwrap(), include_dir.unwrap())
-    }
+    let is_windows = target.contains("windows");
+    let openssl_dir = if is_windows {
+        virtual_env.join("openssl")
+     } else {
+        virtual_env.clone()
+     };
+    let lib_dir = openssl_dir.join("lib");
+    let include_dir = openssl_dir.join("include");
+
+    (lib_dir, include_dir)
 }
 
 fn find_openssl_dir(target: &str) -> OsString {

@@ -170,10 +170,6 @@ extern "C" {
     pub fn EVP_des_ede3_cfb64() -> *const EVP_CIPHER;
     pub fn EVP_des_cbc() -> *const EVP_CIPHER;
     pub fn EVP_rc4() -> *const EVP_CIPHER;
-    pub fn EVP_bf_ecb() -> *const EVP_CIPHER;
-    pub fn EVP_bf_cbc() -> *const EVP_CIPHER;
-    pub fn EVP_bf_cfb64() -> *const EVP_CIPHER;
-    pub fn EVP_bf_ofb() -> *const EVP_CIPHER;
     pub fn EVP_aes_128_ecb() -> *const EVP_CIPHER;
     pub fn EVP_aes_128_cbc() -> *const EVP_CIPHER;
     pub fn EVP_aes_128_cfb1() -> *const EVP_CIPHER;
