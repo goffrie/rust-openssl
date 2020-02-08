@@ -318,6 +318,9 @@ pub const SSL_OP_NO_DTLSv1_2: c_ulong = 0x08000000;
 #[cfg(ossl111)]
 pub const SSL_OP_NO_TLSv1_3: c_ulong = 0x20000000;
 
+#[cfg(ossl110h)]
+pub const SSL_OP_NO_RENEGOTIATION: c_ulong = 0x40000000;
+
 cfg_if! {
     if #[cfg(ossl111)] {
         pub const SSL_OP_NO_SSL_MASK: c_ulong = SSL_OP_NO_SSLv2
@@ -711,8 +714,12 @@ pub const SSL_CTRL_SET_TLSEXT_STATUS_REQ_OCSP_RESP: c_int = 71;
 #[cfg(any(libressl, all(ossl101, not(ossl110))))]
 pub const SSL_CTRL_CLEAR_OPTIONS: c_int = 77;
 pub const SSL_CTRL_GET_EXTRA_CHAIN_CERTS: c_int = 82;
+#[cfg(ossl111)]
+pub const SSL_CTRL_SET_GROUPS_LIST: c_int = 92;
 #[cfg(any(libressl, all(ossl102, not(ossl110))))]
 pub const SSL_CTRL_SET_ECDH_AUTO: c_int = 94;
+#[cfg(ossl102)]
+pub const SSL_CTRL_SET_SIGALGS_LIST: c_int = 98;
 #[cfg(ossl102)]
 pub const SSL_CTRL_SET_VERIFY_CERT_STORE: c_int = 106;
 #[cfg(ossl110)]
@@ -754,6 +761,26 @@ pub unsafe fn SSL_CTX_get_extra_chain_certs(
 #[cfg(ossl102)]
 pub unsafe fn SSL_CTX_set0_verify_cert_store(ctx: *mut SSL_CTX, st: *mut X509_STORE) -> c_long {
     SSL_CTX_ctrl(ctx, SSL_CTRL_SET_VERIFY_CERT_STORE, 0, st as *mut c_void)
+}
+
+#[cfg(ossl111)]
+pub unsafe fn SSL_CTX_set1_groups_list(ctx: *mut SSL_CTX, s: *const c_char) -> c_long {
+    SSL_CTX_ctrl(
+        ctx,
+        SSL_CTRL_SET_GROUPS_LIST,
+        0,
+        s as *const c_void as *mut c_void,
+    )
+}
+
+#[cfg(ossl102)]
+pub unsafe fn SSL_CTX_set1_sigalgs_list(ctx: *mut SSL_CTX, s: *const c_char) -> c_long {
+    SSL_CTX_ctrl(
+        ctx,
+        SSL_CTRL_SET_SIGALGS_LIST,
+        0,
+        s as *const c_void as *mut c_void,
+    )
 }
 
 #[cfg(any(libressl, all(ossl102, not(ossl110))))]
@@ -1057,7 +1084,7 @@ extern "C" {
 }
 
 cfg_if! {
-    if #[cfg(ossl110)] {
+    if #[cfg(any(ossl110, libressl291))] {
         extern "C" {
             pub fn TLS_method() -> *const SSL_METHOD;
 
@@ -1092,6 +1119,9 @@ extern "C" {
     pub fn SSL_shutdown(ssl: *mut SSL) -> c_int;
 
     pub fn SSL_CTX_set_client_CA_list(ctx: *mut SSL_CTX, list: *mut stack_st_X509_NAME);
+
+    #[cfg(not(libressl))]
+    pub fn SSL_CTX_add_client_CA(ctx: *mut SSL_CTX, cacert: *mut X509) -> c_int;
 
     pub fn SSL_CTX_set_default_verify_paths(ctx: *mut SSL_CTX) -> c_int;
     pub fn SSL_CTX_load_verify_locations(
@@ -1311,7 +1341,11 @@ extern "C" {
 }
 
 cfg_if! {
-    if #[cfg(ossl110)] {
+    if #[cfg(ossl111c)] {
+        extern "C" {
+            pub fn SSL_session_reused(ssl: *const SSL) -> c_int;
+        }
+    } else if #[cfg(ossl110)] {
         extern "C" {
             pub fn SSL_session_reused(ssl: *mut SSL) -> c_int;
         }

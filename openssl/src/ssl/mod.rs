@@ -238,6 +238,12 @@ bitflags! {
         #[cfg(any(ossl102, ossl110))]
         const NO_SSL_MASK = ffi::SSL_OP_NO_SSL_MASK;
 
+        /// Disallow all renegotiation in TLSv1.2 and earlier.
+        ///
+        /// Requires OpenSSL 1.1.0h or newer.
+        #[cfg(ossl110h)]
+        const NO_RENEGOTIATION = ffi::SSL_OP_NO_RENEGOTIATION;
+
         /// Enable TLSv1.3 Compatibility mode.
         ///
         /// Requires OpenSSL 1.1.1 or newer. This is on by default in 1.1.1, but a future version
@@ -486,6 +492,7 @@ impl NameType {
 lazy_static! {
     static ref INDEXES: Mutex<HashMap<TypeId, c_int>> = Mutex::new(HashMap::new());
     static ref SSL_INDEXES: Mutex<HashMap<TypeId, c_int>> = Mutex::new(HashMap::new());
+    static ref SESSION_CTX_INDEX: Index<Ssl, SslContext> = Ssl::new_ex_index().unwrap();
 }
 
 unsafe extern "C" fn free_data_box<T>(
@@ -870,10 +877,21 @@ impl SslContextBuilder {
         }
     }
 
+    /// Add the provided CA certificate to the list sent by the server to the client when
+    /// requesting client-side TLS authentication.
+    ///
+    /// This corresponds to [`SSL_CTX_add_client_CA`].
+    ///
+    /// [`SSL_CTX_add_client_CA`]: https://www.openssl.org/docs/man1.0.2/man3/SSL_CTX_set_client_CA_list.html
+    #[cfg(not(libressl))]
+    pub fn add_client_ca(&mut self, cacert: &X509Ref) -> Result<(), ErrorStack> {
+        unsafe { cvt(ffi::SSL_CTX_add_client_CA(self.as_ptr(), cacert.as_ptr())).map(|_| ()) }
+    }
+
     /// Set the context identifier for sessions.
     ///
     /// This value identifies the server's session cache to clients, telling them when they're
-    /// able to reuse sessions. It should be be set to a unique value per server, unless multiple
+    /// able to reuse sessions. It should be set to a unique value per server, unless multiple
     /// servers share a session cache.
     ///
     /// This value should be set when using client certificates, or each request will fail its
@@ -1011,7 +1029,7 @@ impl SslContextBuilder {
     /// This corresponds to [`SSL_CTX_set_cipher_list`].
     ///
     /// [`ciphers`]: https://www.openssl.org/docs/man1.1.0/apps/ciphers.html
-    /// [`SSL_CTX_set_cipher_list`]: https://www.openssl.org/docs/man1.1.0/ssl/SSL_get_client_ciphers.html
+    /// [`SSL_CTX_set_cipher_list`]: https://www.openssl.org/docs/manmaster/man3/SSL_CTX_set_cipher_list.html
     pub fn set_cipher_list(&mut self, cipher_list: &str) -> Result<(), ErrorStack> {
         let cipher_list = CString::new(cipher_list).unwrap();
         unsafe {
@@ -1025,7 +1043,7 @@ impl SslContextBuilder {
 
     /// Sets the list of supported ciphers for the TLSv1.3 protocol.
     ///
-    /// The `set_cipher_list` method controls lthe cipher suites for protocols before TLSv1.3.
+    /// The `set_cipher_list` method controls the cipher suites for protocols before TLSv1.3.
     ///
     /// The format consists of TLSv1.3 ciphersuite names separated by `:` characters in order of
     /// preference.
@@ -1686,6 +1704,37 @@ impl SslContextBuilder {
         unsafe { ffi::SSL_CTX_sess_set_cache_size(self.as_ptr(), size.into()).into() }
     }
 
+    /// Sets the context's supported signature algorithms.
+    ///
+    /// This corresponds to [`SSL_CTX_set1_sigalgs_list`].
+    ///
+    /// Requires OpenSSL 1.0.2 or newer.
+    ///
+    /// [`SSL_CTX_set1_sigalgs_list`]: https://www.openssl.org/docs/man1.1.0/man3/SSL_CTX_set1_sigalgs_list.html
+    #[cfg(ossl102)]
+    pub fn set_sigalgs_list(&mut self, sigalgs: &str) -> Result<(), ErrorStack> {
+        let sigalgs = CString::new(sigalgs).unwrap();
+        unsafe {
+            cvt(ffi::SSL_CTX_set1_sigalgs_list(self.as_ptr(), sigalgs.as_ptr()) as c_int)
+                .map(|_| ())
+        }
+    }
+
+    /// Sets the context's supported elliptic curve groups.
+    ///
+    /// This corresponds to [`SSL_CTX_set1_groups_list`].
+    ///
+    /// Requires OpenSSL 1.1.1 or newer.
+    ///
+    /// [`SSL_CTX_set1_groups_list`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_CTX_set1_groups_list.html
+    #[cfg(ossl111)]
+    pub fn set_groups_list(&mut self, groups: &str) -> Result<(), ErrorStack> {
+        let groups = CString::new(groups).unwrap();
+        unsafe {
+            cvt(ffi::SSL_CTX_set1_groups_list(self.as_ptr(), groups.as_ptr()) as c_int).map(|_| ())
+        }
+    }
+
     /// Consumes the builder, returning a new `SslContext`.
     pub fn build(self) -> SslContext {
         self.0
@@ -2177,7 +2226,7 @@ impl SslSessionRef {
     ///
     /// This corresponds to [`SSL_SESSION_get_protocol_version`].
     ///
-    /// [`SSL_SESSION_get_protocol_version`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_SESSION_get_time.html
+    /// [`SSL_SESSION_get_protocol_version`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_SESSION_get_protocol_version.html
     #[cfg(ossl110)]
     pub fn protocol_version(&self) -> SslVersion {
         unsafe {
@@ -2261,10 +2310,14 @@ impl Ssl {
     /// This corresponds to [`SSL_new`].
     ///
     /// [`SSL_new`]: https://www.openssl.org/docs/man1.0.2/ssl/SSL_new.html
+    // FIXME should take &SslContextRef
     pub fn new(ctx: &SslContext) -> Result<Ssl, ErrorStack> {
         unsafe {
-            let ssl = cvt_p(ffi::SSL_new(ctx.as_ptr()))?;
-            Ok(Ssl::from_ptr(ssl))
+            let ptr = cvt_p(ffi::SSL_new(ctx.as_ptr()))?;
+            let mut ssl = Ssl::from_ptr(ptr);
+            ssl.set_ex_data(*SESSION_CTX_INDEX, ctx.clone());
+
+            Ok(ssl)
         }
     }
 
@@ -2547,7 +2600,7 @@ impl SslRef {
         }
     }
 
-    /// Returns the verified certificate chani of the peer, including the leaf certificate.
+    /// Returns the verified certificate chain of the peer, including the leaf certificate.
     ///
     /// If verification was not successful (i.e. [`verify_result`] does not return
     /// [`X509VerifyResult::OK`]), this chain may be incomplete or invalid.
@@ -3757,6 +3810,20 @@ impl<S> SslStreamBuilder<S> {
     pub fn ssl(&self) -> &SslRef {
         &self.inner.ssl
     }
+
+    /// Set the DTLS MTU size.
+    ///
+    /// It will be ignored if the value is smaller than the minimum packet size
+    /// the DTLS protocol requires.
+    ///
+    /// # Panics
+    /// This function panics if the given mtu size can't be represented in a positive `c_long` range
+    pub fn set_dtls_mtu_size(&mut self, mtu_size: usize) {
+        unsafe {
+            let bio = self.inner.ssl.get_raw_rbio();
+            bio::set_dtls_mtu_size::<S>(bio, mtu_size);
+        }
+    }
 }
 
 /// The result of a shutdown request.
@@ -3831,9 +3898,14 @@ cfg_if! {
 }
 
 cfg_if! {
-    if #[cfg(ossl110)] {
+    if #[cfg(any(ossl110, libressl291))] {
         use ffi::{TLS_method, DTLS_method};
-
+    } else {
+        use ffi::{SSLv23_method as TLS_method, DTLSv1_method as DTLS_method};
+    }
+}
+cfg_if! {
+    if #[cfg(ossl110)] {
         unsafe fn get_new_idx(f: ffi::CRYPTO_EX_free) -> c_int {
             ffi::CRYPTO_get_ex_new_index(
                 ffi::CRYPTO_EX_INDEX_SSL_CTX,
@@ -3856,13 +3928,25 @@ cfg_if! {
             )
         }
     } else {
-        use ffi::{SSLv23_method as TLS_method, DTLSv1_method as DTLS_method};
+        use std::sync::{Once, ONCE_INIT};
 
         unsafe fn get_new_idx(f: ffi::CRYPTO_EX_free) -> c_int {
+            // hack around https://rt.openssl.org/Ticket/Display.html?id=3710&user=guest&pass=guest
+            static ONCE: Once = ONCE_INIT;
+            ONCE.call_once(|| {
+                ffi::SSL_CTX_get_ex_new_index(0, ptr::null_mut(), None, None, None);
+            });
+
             ffi::SSL_CTX_get_ex_new_index(0, ptr::null_mut(), None, None, Some(f))
         }
 
         unsafe fn get_new_ssl_idx(f: ffi::CRYPTO_EX_free) -> c_int {
+            // hack around https://rt.openssl.org/Ticket/Display.html?id=3710&user=guest&pass=guest
+            static ONCE: Once = ONCE_INIT;
+            ONCE.call_once(|| {
+                ffi::SSL_get_ex_new_index(0, ptr::null_mut(), None, None, None);
+            });
+
             ffi::SSL_get_ex_new_index(0, ptr::null_mut(), None, None, Some(f))
         }
     }

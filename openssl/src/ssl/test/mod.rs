@@ -11,12 +11,13 @@ use std::net::UdpSocket;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering, ATOMIC_BOOL_INIT};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tempdir::TempDir;
 
 use dh::Dh;
+use error::ErrorStack;
 use hash::MessageDigest;
 use ocsp::{OcspResponse, OcspResponseStatus};
 use pkey::PKey;
@@ -29,8 +30,8 @@ use ssl::SslVersion;
 use ssl::{ClientHelloResponse, ExtensionContext};
 use ssl::{
     Error, HandshakeError, MidHandshakeSslStream, ShutdownResult, ShutdownState, Ssl, SslAcceptor,
-    SslConnector, SslContext, SslFiletype, SslMethod, SslOptions, SslSessionCacheMode, SslStream,
-    SslVerifyMode, StatusType,
+    SslAcceptorBuilder, SslConnector, SslContext, SslContextBuilder, SslFiletype, SslMethod,
+    SslOptions, SslSessionCacheMode, SslStream, SslStreamBuilder, SslVerifyMode, StatusType,
 };
 #[cfg(ossl102)]
 use x509::store::X509StoreBuilder;
@@ -192,7 +193,7 @@ fn verify_trusted_get_error_err() {
 
 #[test]
 fn verify_callback() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let server = Server::builder().build();
 
@@ -214,7 +215,7 @@ fn verify_callback() {
 
 #[test]
 fn ssl_verify_callback() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let server = Server::builder().build();
 
@@ -306,6 +307,7 @@ fn state() {
 /// lists of supported protocols have an overlap -- with only ONE protocol
 /// being valid for both.
 #[test]
+#[cfg_attr(libressl291, ignore)]
 fn test_connect_with_srtp_ctx() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -320,7 +322,9 @@ fn test_connect_with_srtp_ctx() {
         ctx.set_private_key_file(&Path::new("test/key.pem"), SslFiletype::PEM)
             .unwrap();
         let ssl = Ssl::new(&ctx.build()).unwrap();
-        let mut stream = ssl.accept(stream).unwrap();
+        let mut builder = SslStreamBuilder::new(ssl, stream);
+        builder.set_dtls_mtu_size(1500);
+        let mut stream = builder.accept().unwrap();
 
         let mut buf = [0; 60];
         stream
@@ -338,7 +342,9 @@ fn test_connect_with_srtp_ctx() {
     ctx.set_tlsext_use_srtp("SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32")
         .unwrap();
     let ssl = Ssl::new(&ctx.build()).unwrap();
-    let mut stream = ssl.connect(stream).unwrap();
+    let mut builder = SslStreamBuilder::new(ssl, stream);
+    builder.set_dtls_mtu_size(1500);
+    let mut stream = builder.connect().unwrap();
 
     let mut buf = [1; 60];
     {
@@ -362,6 +368,7 @@ fn test_connect_with_srtp_ctx() {
 /// lists of supported protocols have an overlap -- with only ONE protocol
 /// being valid for both.
 #[test]
+#[cfg_attr(libressl291, ignore)]
 fn test_connect_with_srtp_ssl() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -387,7 +394,9 @@ fn test_connect_with_srtp_ssl() {
             "SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32",
             profilenames
         );
-        let mut stream = ssl.accept(stream).unwrap();
+        let mut builder = SslStreamBuilder::new(ssl, stream);
+        builder.set_dtls_mtu_size(1500);
+        let mut stream = builder.accept().unwrap();
 
         let mut buf = [0; 60];
         stream
@@ -405,7 +414,9 @@ fn test_connect_with_srtp_ssl() {
     let mut ssl = Ssl::new(&ctx.build()).unwrap();
     ssl.set_tlsext_use_srtp("SRTP_AES128_CM_SHA1_80:SRTP_AES128_CM_SHA1_32")
         .unwrap();
-    let mut stream = ssl.connect(stream).unwrap();
+    let mut builder = SslStreamBuilder::new(ssl, stream);
+    builder.set_dtls_mtu_size(1500);
+    let mut stream = builder.connect().unwrap();
 
     let mut buf = [1; 60];
     {
@@ -598,7 +609,10 @@ fn default_verify_paths() {
     ctx.set_default_verify_paths().unwrap();
     ctx.set_verify(SslVerifyMode::PEER);
     let ctx = ctx.build();
-    let s = TcpStream::connect("google.com:443").unwrap();
+    let s = match TcpStream::connect("google.com:443") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
     let mut ssl = Ssl::new(&ctx).unwrap();
     ssl.set_hostname("google.com").unwrap();
     let mut socket = ssl.connect(s).unwrap();
@@ -735,15 +749,14 @@ fn connector_no_hostname_can_disable_verify() {
     s.read_exact(&mut [0]).unwrap();
 }
 
-#[test]
-fn connector_client_server_mozilla_intermediate() {
-    let listener = TcpListener::bind("127.0.0.1:1234").unwrap();
+fn test_mozilla_server(new: fn(SslMethod) -> Result<SslAcceptorBuilder, ErrorStack>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
 
     let t = thread::spawn(move || {
         let key = PKey::private_key_from_pem(KEY).unwrap();
         let cert = X509::from_pem(CERT).unwrap();
-        let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        let mut acceptor = new(SslMethod::tls()).unwrap();
         acceptor.set_private_key(&key).unwrap();
         acceptor.set_certificate(&cert).unwrap();
         let acceptor = acceptor.build();
@@ -768,35 +781,24 @@ fn connector_client_server_mozilla_intermediate() {
 }
 
 #[test]
+fn connector_client_server_mozilla_intermediate() {
+    test_mozilla_server(SslAcceptor::mozilla_intermediate);
+}
+
+#[test]
 fn connector_client_server_mozilla_modern() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
+    test_mozilla_server(SslAcceptor::mozilla_modern);
+}
 
-    let t = thread::spawn(move || {
-        let key = PKey::private_key_from_pem(KEY).unwrap();
-        let cert = X509::from_pem(CERT).unwrap();
-        let mut acceptor = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-        acceptor.set_private_key(&key).unwrap();
-        acceptor.set_certificate(&cert).unwrap();
-        let acceptor = acceptor.build();
-        let stream = listener.accept().unwrap().0;
-        let mut stream = acceptor.accept(stream).unwrap();
+#[test]
+fn connector_client_server_mozilla_intermediate_v5() {
+    test_mozilla_server(SslAcceptor::mozilla_intermediate_v5);
+}
 
-        stream.write_all(b"hello").unwrap();
-    });
-
-    let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
-    connector.set_ca_file("test/root-ca.pem").unwrap();
-    let connector = connector.build();
-
-    let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    let mut stream = connector.connect("foobar.com", stream).unwrap();
-
-    let mut buf = [0; 5];
-    stream.read_exact(&mut buf).unwrap();
-    assert_eq!(b"hello", &buf);
-
-    t.join().unwrap();
+#[test]
+#[cfg(ossl111)]
+fn connector_client_server_mozilla_modern_v5() {
+    test_mozilla_server(SslAcceptor::mozilla_modern_v5);
 }
 
 #[test]
@@ -843,7 +845,7 @@ fn cert_store() {
 
 #[test]
 fn tmp_dh_callback() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ctx().set_tmp_dh_callback(|_, _, _| {
@@ -870,7 +872,7 @@ fn tmp_ecdh_callback() {
     use ec::EcKey;
     use nid::Nid;
 
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ctx().set_tmp_ecdh_callback(|_, _, _| {
@@ -889,7 +891,7 @@ fn tmp_ecdh_callback() {
 
 #[test]
 fn tmp_dh_callback_ssl() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ssl_cb(|ssl| {
@@ -918,7 +920,7 @@ fn tmp_ecdh_callback_ssl() {
     use ec::EcKey;
     use nid::Nid;
 
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ssl_cb(|ssl| {
@@ -962,8 +964,8 @@ fn active_session() {
 
 #[test]
 fn status_callbacks() {
-    static CALLED_BACK_SERVER: AtomicBool = ATOMIC_BOOL_INIT;
-    static CALLED_BACK_CLIENT: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK_SERVER: AtomicBool = AtomicBool::new(false);
+    static CALLED_BACK_CLIENT: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server
@@ -1001,7 +1003,7 @@ fn status_callbacks() {
 
 #[test]
 fn new_session_callback() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ctx().set_session_id_context(b"foo").unwrap();
@@ -1016,6 +1018,34 @@ fn new_session_callback() {
     client
         .ctx()
         .set_new_session_callback(|_, _| CALLED_BACK.store(true, Ordering::SeqCst));
+
+    client.connect();
+
+    assert!(CALLED_BACK.load(Ordering::SeqCst));
+}
+
+#[test]
+fn new_session_callback_swapped_ctx() {
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
+
+    let mut server = Server::builder();
+    server.ctx().set_session_id_context(b"foo").unwrap();
+
+    let server = server.build();
+
+    let mut client = server.client();
+
+    client
+        .ctx()
+        .set_session_cache_mode(SslSessionCacheMode::CLIENT | SslSessionCacheMode::NO_INTERNAL);
+    client
+        .ctx()
+        .set_new_session_callback(|_, _| CALLED_BACK.store(true, Ordering::SeqCst));
+
+    let mut client = client.build().builder();
+
+    let ctx = SslContextBuilder::new(SslMethod::tls()).unwrap().build();
+    client.ssl().set_ssl_context(&ctx).unwrap();
 
     client.connect();
 
@@ -1098,7 +1128,7 @@ fn no_version_overlap() {
 #[test]
 #[cfg(ossl111)]
 fn custom_extensions() {
-    static FOUND_EXTENSION: AtomicBool = ATOMIC_BOOL_INIT;
+    static FOUND_EXTENSION: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server
@@ -1283,8 +1313,8 @@ fn psk_ciphers() {
     const CIPHER: &'static str = "PSK-AES128-CBC-SHA";
     const PSK: &[u8] = b"thisisaverysecurekey";
     const CLIENT_IDENT: &[u8] = b"thisisaclient";
-    static CLIENT_CALLED: AtomicBool = ATOMIC_BOOL_INIT;
-    static SERVER_CALLED: AtomicBool = ATOMIC_BOOL_INIT;
+    static CLIENT_CALLED: AtomicBool = AtomicBool::new(false);
+    static SERVER_CALLED: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ctx().set_cipher_list(CIPHER).unwrap();
@@ -1319,7 +1349,7 @@ fn psk_ciphers() {
 
 #[test]
 fn sni_callback_swapped_ctx() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
 
@@ -1342,7 +1372,7 @@ fn sni_callback_swapped_ctx() {
 #[test]
 #[cfg(ossl111)]
 fn client_hello() {
-    static CALLED_BACK: AtomicBool = ATOMIC_BOOL_INIT;
+    static CALLED_BACK: AtomicBool = AtomicBool::new(false);
 
     let mut server = Server::builder();
     server.ctx().set_client_hello_callback(|ssl, _| {

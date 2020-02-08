@@ -140,6 +140,7 @@ mod bio;
 mod util;
 pub mod aes;
 pub mod asn1;
+pub mod base64;
 pub mod bn;
 #[cfg(not(libressl))]
 pub mod cms;
@@ -149,6 +150,7 @@ pub mod dh;
 pub mod dsa;
 pub mod ec;
 pub mod ecdsa;
+pub mod envelope;
 pub mod error;
 pub mod ex_data;
 #[cfg(not(libressl))]

@@ -107,7 +107,9 @@ impl EcdsaSig {
     from_der! {
         /// Decodes a DER-encoded ECDSA signature.
         ///
-        /// This corresponds to [`d2i_ECDSA_SIG`]: https://www.openssl.org/docs/man1.1.0/crypto/d2i_ECDSA_SIG.html
+        /// This corresponds to [`d2i_ECDSA_SIG`].
+        ///
+        /// [`d2i_ECDSA_SIG`]: https://www.openssl.org/docs/man1.1.0/crypto/d2i_ECDSA_SIG.html
         from_der,
         EcdsaSig,
         ffi::d2i_ECDSA_SIG
@@ -118,7 +120,9 @@ impl EcdsaSigRef {
     to_der! {
         /// Serializes the ECDSA signature into a DER-encoded ECDSASignature structure.
         ///
-        /// This corresponds to [`i2d_ECDSA_SIG`]: https://www.openssl.org/docs/man1.1.0/crypto/i2d_ECDSA_SIG.html
+        /// This corresponds to [`i2d_ECDSA_SIG`].
+        ///
+        /// [`i2d_ECDSA_SIG`]: https://www.openssl.org/docs/man1.1.0/crypto/i2d_ECDSA_SIG.html
         to_der,
         ffi::i2d_ECDSA_SIG
     }
@@ -134,6 +138,11 @@ cfg_if! {
             r: *mut ffi::BIGNUM,
             s: *mut ffi::BIGNUM,
         ) -> c_int {
+            if r.is_null() || s.is_null() {
+                return 0;
+            }
+            ffi::BN_clear_free((*sig).r);
+            ffi::BN_clear_free((*sig).s);
             (*sig).r = r;
             (*sig).s = s;
             1

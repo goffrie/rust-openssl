@@ -126,6 +126,46 @@ impl Cipher {
         unsafe { Cipher(ffi::EVP_aes_128_ccm()) }
     }
 
+    pub fn aes_128_ofb() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_128_ofb()) }
+    }
+
+    pub fn aes_192_ecb() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_ecb()) }
+    }
+
+    pub fn aes_192_cbc() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_cbc()) }
+    }
+
+    pub fn aes_192_ctr() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_ctr()) }
+    }
+
+    pub fn aes_192_cfb1() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_cfb1()) }
+    }
+
+    pub fn aes_192_cfb128() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_cfb128()) }
+    }
+
+    pub fn aes_192_cfb8() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_cfb8()) }
+    }
+
+    pub fn aes_192_gcm() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_gcm()) }
+    }
+
+    pub fn aes_192_ccm() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_ccm()) }
+    }
+
+    pub fn aes_192_ofb() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_192_ofb()) }
+    }
+
     pub fn aes_256_ecb() -> Cipher {
         unsafe { Cipher(ffi::EVP_aes_256_ecb()) }
     }
@@ -160,6 +200,10 @@ impl Cipher {
 
     pub fn aes_256_ccm() -> Cipher {
         unsafe { Cipher(ffi::EVP_aes_256_ccm()) }
+    }
+
+    pub fn aes_256_ofb() -> Cipher {
+        unsafe { Cipher(ffi::EVP_aes_256_ofb()) }
     }
 
     pub fn des_cbc() -> Cipher {
@@ -476,12 +520,20 @@ impl Crypter {
     ///
     /// # Panics
     ///
-    /// Panics if `output.len() < input.len() + block_size` where
-    /// `block_size` is the block size of the cipher (see `Cipher::block_size`),
-    /// or if `output.len() > c_int::max_value()`.
+    /// Panics for stream ciphers if `output.len() < input.len()`.
+    ///
+    /// Panics for block ciphers if `output.len() < input.len() + block_size`,
+    /// where `block_size` is the block size of the cipher (see `Cipher::block_size`).
+    ///
+    /// Panics if `output.len() > c_int::max_value()`.
     pub fn update(&mut self, input: &[u8], output: &mut [u8]) -> Result<usize, ErrorStack> {
         unsafe {
-            assert!(output.len() >= input.len() + self.block_size);
+            let block_size = if self.block_size > 1 {
+                self.block_size
+            } else {
+                0
+            };
+            assert!(output.len() >= input.len() + block_size);
             assert!(output.len() <= c_int::max_value() as usize);
             let mut outl = output.len() as c_int;
             let inl = input.len() as c_int;
@@ -507,10 +559,13 @@ impl Crypter {
     ///
     /// # Panics
     ///
-    /// Panics if `output` is less than the cipher's block size.
+    /// Panics for block ciphers if `output.len() < block_size`,
+    /// where `block_size` is the block size of the cipher (see `Cipher::block_size`).
     pub fn finalize(&mut self, output: &mut [u8]) -> Result<usize, ErrorStack> {
         unsafe {
-            assert!(output.len() >= self.block_size);
+            if self.block_size > 1 {
+                assert!(output.len() >= self.block_size);
+            }
             let mut outl = cmp::min(output.len(), c_int::max_value() as usize) as c_int;
 
             cvt(ffi::EVP_CipherFinal(
@@ -737,6 +792,23 @@ mod tests {
     use super::*;
     use hex::{self, FromHex};
 
+    #[test]
+    fn test_stream_cipher_output() {
+        let key = [0u8; 16];
+        let iv = [0u8; 16];
+        let mut c = super::Crypter::new(
+            super::Cipher::aes_128_ctr(),
+            super::Mode::Encrypt,
+            &key,
+            Some(&iv),
+        )
+        .unwrap();
+
+        assert_eq!(c.update(&[0u8; 15], &mut [0u8; 15]).unwrap(), 15);
+        assert_eq!(c.update(&[0u8; 1], &mut [0u8; 1]).unwrap(), 1);
+        assert_eq!(c.finalize(&mut [0u8; 0]).unwrap(), 0);
+    }
+
     // Test vectors from FIPS-197:
     // http://csrc.nist.gov/publications/fips/fips197/fips-197.pdf
     #[test]
@@ -940,6 +1012,78 @@ mod tests {
     }
 
     #[test]
+    fn test_aes128_ofb() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
+        let ct = "3b3fd92eb72dad20333449f8e83cfb4a7789508d16918f03f53c52dac54ed8259740051e9c5fecf64344f7a82260edcc304c6528f659c77866a510d9c1d6ae5e";
+        let key = "2b7e151628aed2a6abf7158809cf4f3c";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_128_ofb(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes192_ctr() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
+        let ct = "1abc932417521ca24f2b0459fe7e6e0b090339ec0aa6faefd5ccc2c6f4ce8e941e36b26bd1ebc670d1bd1d665620abf74f78a7f6d29809585a97daec58c6b050";
+        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+        let iv = "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff";
+
+        cipher_test(super::Cipher::aes_192_ctr(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes192_cfb1() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1";
+        let ct = "9359";
+        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_192_cfb1(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes192_cfb128() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
+        let ct = "cdc80d6fddf18cab34c25909c99a417467ce7f7f81173621961a2b70171d3d7a2e1e8a1dd59b88b1c8e60fed1efac4c9c05f9f9ca9834fa042ae8fba584b09ff";
+        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_192_cfb128(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes192_cfb8() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d";
+        let ct = "cda2521ef0a905ca44cd057cbf0d47a0678a";
+        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_192_cfb8(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes192_ofb() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
+        let ct = "cdc80d6fddf18cab34c25909c99a4174fcc28b8d4c63837c09e81700c11004018d9a9aeac0f6596f559c6d4daf59a5f26d9f200857ca6c3e9cac524bd9acc92a";
+        let key = "8e73b0f7da0e6452c810f32b809079e562f8ead2522c6b7b";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_192_ofb(), pt, ct, key, iv);
+    }
+
+    #[test]
     fn test_aes256_cfb1() {
         let pt = "6bc1";
         let ct = "9029";
@@ -967,6 +1111,18 @@ mod tests {
         let iv = "000102030405060708090a0b0c0d0e0f";
 
         cipher_test(super::Cipher::aes_256_cfb8(), pt, ct, key, iv);
+    }
+
+    #[test]
+    fn test_aes256_ofb() {
+        // Lifted from http://csrc.nist.gov/publications/nistpubs/800-38a/sp800-38a.pdf
+
+        let pt = "6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710";
+        let ct = "dc7e84bfda79164b7ecd8486985d38604febdc6740d20b3ac88f6ad82a4fb08d71ab47a086e86eedf39d1c5bba97c4080126141d67f37be8538f5a8be740e484";
+        let key = "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4";
+        let iv = "000102030405060708090a0b0c0d0e0f";
+
+        cipher_test(super::Cipher::aes_256_ofb(), pt, ct, key, iv);
     }
 
     #[test]
