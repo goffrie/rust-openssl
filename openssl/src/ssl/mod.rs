@@ -93,9 +93,7 @@ use ssl::bio::BioMethod;
 use ssl::callbacks::*;
 use ssl::error::InnerError;
 use stack::{Stack, StackRef};
-#[cfg(ossl102)]
-use x509::store::X509Store;
-use x509::store::{X509StoreBuilderRef, X509StoreRef};
+use x509::store::{X509Store, X509StoreBuilderRef, X509StoreRef};
 #[cfg(any(ossl102, libressl261))]
 use x509::verify::X509VerifyParamRef;
 use x509::{X509Name, X509Ref, X509StoreContextRef, X509VerifyResult, X509};
@@ -321,6 +319,22 @@ impl SslMethod {
     /// on OpenSSL 1.0.x.
     pub fn dtls() -> SslMethod {
         unsafe { SslMethod(DTLS_method()) }
+    }
+
+    /// Support all versions of the TLS protocol, explicitly as a client.
+    ///
+    /// This corresponds to `TLS_client_method` on OpenSSL 1.1.0 and
+    /// `SSLv23_client_method` on OpenSSL 1.0.x.
+    pub fn tls_client() -> SslMethod {
+        unsafe { SslMethod(TLS_client_method()) }
+    }
+
+    /// Support all versions of the TLS protocol, explicitly as a server.
+    ///
+    /// This corresponds to `TLS_server_method` on OpenSSL 1.1.0 and
+    /// `SSLv23_server_method` on OpenSSL 1.0.x.
+    pub fn tls_server() -> SslMethod {
+        unsafe { SslMethod(TLS_server_method()) }
     }
 
     /// Constructs an `SslMethod` from a pointer to the underlying OpenSSL value.
@@ -743,6 +757,18 @@ impl SslContextBuilder {
             mem::forget(cert_store);
 
             Ok(())
+        }
+    }
+
+    /// Replaces the context's certificate store.
+    ///
+    /// This corresponds to [`SSL_CTX_set_cert_store`].
+    ///
+    /// [`SSL_CTX_set_cert_store`]: https://www.openssl.org/docs/man1.0.2/man3/SSL_CTX_set_cert_store.html
+    pub fn set_cert_store(&mut self, cert_store: X509Store) {
+        unsafe {
+            ffi::SSL_CTX_set_cert_store(self.as_ptr(), cert_store.as_ptr());
+            mem::forget(cert_store);
         }
     }
 
@@ -1944,6 +1970,17 @@ impl SslContextRef {
     pub fn session_cache_size(&self) -> i64 {
         unsafe { ffi::SSL_CTX_sess_get_cache_size(self.as_ptr()).into() }
     }
+
+    /// Returns the verify mode that was set on this context from [`SslContextBuilder::set_verify`].
+    ///
+    /// This corresponds to [`SSL_CTX_get_verify_mode`].
+    ///
+    /// [`SslContextBuilder::set_verify`]: struct.SslContextBuilder.html#method.set_verify
+    /// [`SSL_CTX_get_verify_mode`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_CTX_get_verify_mode.html
+    pub fn verify_mode(&self) -> SslVerifyMode {
+        let mode = unsafe { ffi::SSL_CTX_get_verify_mode(self.as_ptr()) };
+        SslVerifyMode::from_bits(mode).expect("SSL_CTX_get_verify_mode returned invalid mode")
+    }
 }
 
 /// Information about the state of a cipher.
@@ -2392,6 +2429,16 @@ impl SslRef {
     /// [`SSL_set_verify`]: https://www.openssl.org/docs/man1.0.2/ssl/SSL_set_verify.html
     pub fn set_verify(&mut self, mode: SslVerifyMode) {
         unsafe { ffi::SSL_set_verify(self.as_ptr(), mode.bits as c_int, None) }
+    }
+
+    /// Returns the verify mode that was set using `set_verify`.
+    ///
+    /// This corresponds to [`SSL_get_verify_mode`].
+    ///
+    /// [`SSL_get_verify_mode`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_get_verify_mode.html
+    pub fn verify_mode(&self) -> SslVerifyMode {
+        let mode = unsafe { ffi::SSL_get_verify_mode(self.as_ptr()) };
+        SslVerifyMode::from_bits(mode).expect("SSL_get_verify_mode returned invalid mode")
     }
 
     /// Like [`SslContextBuilder::set_verify_callback`].
@@ -3172,6 +3219,16 @@ impl SslRef {
         }
     }
 
+    /// Determines if the initial handshake has been completed.
+    ///
+    /// This corresponds to [`SSL_is_init_finished`].
+    ///
+    /// [`SSL_is_init_finished`]: https://www.openssl.org/docs/man1.1.1/man3/SSL_is_init_finished.html
+    #[cfg(ossl110)]
+    pub fn is_init_finished(&self) -> bool {
+        unsafe { ffi::SSL_is_init_finished(self.as_ptr()) != 0 }
+    }
+
     /// Determines if the client's hello message is in the SSLv2 format.
     ///
     /// This can only be used inside of the client hello callback. Otherwise, `false` is returned.
@@ -3899,9 +3956,12 @@ cfg_if! {
 
 cfg_if! {
     if #[cfg(any(ossl110, libressl291))] {
-        use ffi::{TLS_method, DTLS_method};
+        use ffi::{TLS_method, DTLS_method, TLS_client_method, TLS_server_method};
     } else {
-        use ffi::{SSLv23_method as TLS_method, DTLSv1_method as DTLS_method};
+        use ffi::{
+            SSLv23_method as TLS_method, DTLSv1_method as DTLS_method, SSLv23_client_method as TLS_client_method,
+            SSLv23_server_method as TLS_server_method,
+        };
     }
 }
 cfg_if! {

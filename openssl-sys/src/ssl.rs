@@ -672,6 +672,21 @@ extern "C" {
 
     pub fn SSL_get_finished(s: *const SSL, buf: *mut c_void, count: size_t) -> size_t;
     pub fn SSL_get_peer_finished(s: *const SSL, buf: *mut c_void, count: size_t) -> size_t;
+
+    pub fn SSL_CTX_get_verify_mode(ctx: *const SSL_CTX) -> c_int;
+    pub fn SSL_get_verify_mode(s: *const SSL) -> c_int;
+}
+
+cfg_if! {
+    if #[cfg(ossl111)] {
+        extern "C" {
+            pub fn SSL_is_init_finished(s: *const SSL) -> c_int;
+        }
+    } else if #[cfg(ossl110)] {
+        extern "C" {
+            pub fn SSL_is_init_finished(s: *mut SSL) -> c_int;
+        }
+    }
 }
 
 pub const SSL_AD_ILLEGAL_PARAMETER: c_int = SSL3_AD_ILLEGAL_PARAMETER;
@@ -886,6 +901,7 @@ extern "C" {
     #[cfg(any(ossl110, libressl273))]
     pub fn SSL_CTX_up_ref(x: *mut SSL_CTX) -> c_int;
     pub fn SSL_CTX_get_cert_store(ctx: *const SSL_CTX) -> *mut X509_STORE;
+    pub fn SSL_CTX_set_cert_store(ctx: *mut SSL_CTX, store: *mut X509_STORE);
 
     pub fn SSL_get_current_cipher(ssl: *const SSL) -> *const SSL_CIPHER;
     pub fn SSL_CIPHER_get_bits(cipher: *const SSL_CIPHER, alg_bits: *mut c_int) -> c_int;
@@ -1089,6 +1105,10 @@ cfg_if! {
             pub fn TLS_method() -> *const SSL_METHOD;
 
             pub fn DTLS_method() -> *const SSL_METHOD;
+
+            pub fn TLS_server_method() -> *const SSL_METHOD;
+
+            pub fn TLS_client_method() -> *const SSL_METHOD;
         }
     } else {
         extern "C" {
@@ -1096,6 +1116,10 @@ cfg_if! {
             pub fn SSLv3_method() -> *const SSL_METHOD;
 
             pub fn SSLv23_method() -> *const SSL_METHOD;
+
+            pub fn SSLv23_client_method() -> *const SSL_METHOD;
+
+            pub fn SSLv23_server_method() -> *const SSL_METHOD;
 
             pub fn TLSv1_method() -> *const SSL_METHOD;
 

@@ -60,6 +60,11 @@ fn find_openssl_dir(target: &str) -> OsString {
         return OsString::from("/usr");
     }
 
+    // DragonFly has libressl (or openssl) in ports, but this doesn't include a pkg-config file
+    if host == target && target.contains("dragonfly") {
+        return OsString::from("/usr/local");
+    }
+
     let mut msg = format!(
         "
 
@@ -194,31 +199,16 @@ fn try_pkg_config() {
 /// should emit all of the cargo metadata that we need.
 #[cfg(target_env = "msvc")]
 fn try_vcpkg() {
-    use vcpkg;
-
     // vcpkg will not emit any metadata if it can not find libraries
     // appropriate for the target triple with the desired linkage.
 
-    let mut lib = vcpkg::Config::new()
+    let lib = vcpkg::Config::new()
         .emit_includes(true)
-        .lib_name("libcrypto")
-        .lib_name("libssl")
-        .probe("openssl");
+        .find_package("openssl");
 
     if let Err(e) = lib {
         println!(
-            "note: vcpkg did not find openssl as libcrypto and libssl: {}",
-            e
-        );
-        lib = vcpkg::Config::new()
-            .emit_includes(true)
-            .lib_name("libeay32")
-            .lib_name("ssleay32")
-            .probe("openssl");
-    }
-    if let Err(e) = lib {
-        println!(
-            "note: vcpkg did not find openssl as ssleay32 and libeay32: {}",
+            "note: vcpkg did not find openssl: {}",
             e
         );
         return;

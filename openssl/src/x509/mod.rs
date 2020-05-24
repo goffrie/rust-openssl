@@ -342,10 +342,20 @@ impl X509Builder {
     }
 
     /// Adds an X509 extension value to the certificate.
+    ///
+    /// This works just as `append_extension` except it takes ownership of the `X509Extension`.
     pub fn append_extension(&mut self, extension: X509Extension) -> Result<(), ErrorStack> {
+        self.append_extension2(&extension)
+    }
+
+    /// Adds an X509 extension value to the certificate.
+    ///
+    /// This corresponds to [`X509_add_ext`].
+    ///
+    /// [`X509_add_ext`]: https://www.openssl.org/docs/man1.1.0/man3/X509_get_ext.html
+    pub fn append_extension2(&mut self, extension: &X509ExtensionRef) -> Result<(), ErrorStack> {
         unsafe {
             cvt(ffi::X509_add_ext(self.0.as_ptr(), extension.as_ptr(), -1))?;
-            mem::forget(extension);
             Ok(())
         }
     }
@@ -1312,6 +1322,33 @@ impl X509AlgorithmRef {
     }
 }
 
+foreign_type_and_impl_send_sync! {
+    type CType = ffi::X509_OBJECT;
+    fn drop = X509_OBJECT_free;
+
+    /// An `X509` or an X509 certificate revocation list.
+    pub struct X509Object;
+    /// Reference to `X509Object`
+    pub struct X509ObjectRef;
+}
+
+impl X509ObjectRef {
+    pub fn x509(&self) -> Option<&X509Ref> {
+        unsafe {
+            let ptr = X509_OBJECT_get0_X509(self.as_ptr());
+            if ptr.is_null() {
+                None
+            } else {
+                Some(X509Ref::from_ptr(ptr))
+            }
+        }
+    }
+}
+
+impl Stackable for X509Object {
+    type StackType = ffi::stack_st_X509_OBJECT;
+}
+
 cfg_if! {
     if #[cfg(any(ossl110, libressl273))] {
         use ffi::{X509_getm_notAfter, X509_getm_notBefore, X509_up_ref, X509_get0_signature};
@@ -1389,6 +1426,33 @@ cfg_if! {
             }
             assert!(pptype.is_null());
             assert!(pval.is_null());
+        }
+    }
+}
+
+cfg_if! {
+    if #[cfg(any(ossl110, libressl270))] {
+        use ffi::X509_OBJECT_get0_X509;
+    } else {
+        #[allow(bad_style)]
+        unsafe fn X509_OBJECT_get0_X509(x: *mut ffi::X509_OBJECT) -> *mut ffi::X509 {
+            if (*x).type_ == ffi::X509_LU_X509 {
+                (*x).data.x509
+            } else {
+                ptr::null_mut()
+            }
+        }
+    }
+}
+
+cfg_if! {
+    if #[cfg(ossl110)] {
+        use ffi::X509_OBJECT_free;
+    } else {
+        #[allow(bad_style)]
+        unsafe fn X509_OBJECT_free(x: *mut ffi::X509_OBJECT) {
+            ffi::X509_OBJECT_free_contents(x);
+            ffi::CRYPTO_free(x as *mut libc::c_void);
         }
     }
 }
