@@ -6,7 +6,7 @@ use std::process::{self, Command};
 use super::env;
 
 pub fn get_openssl(target: &str) -> (PathBuf, PathBuf) {
-    let virtual_env = env::current_dir().unwrap().join("..").join("..").join("..").join("virtual_env");
+    let virtual_env = env::current_dir().unwrap().join("..").join("..").join("virtual_env");
 
     let is_windows = target.contains("windows");
     let openssl_dir = if is_windows {
